@@ -1,14 +1,16 @@
 // =====================================================
-// Total Battle tracker — v2 (fixed roster + survey form)
+// Total Battle tracker — frontend logic
 // =====================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "/config.js";
 
 if (SUPABASE_URL.startsWith("PASTE_") || SUPABASE_ANON_KEY.startsWith("PASTE_")) {
-  document.body.innerHTML = `<div style="padding:40px;text-align:center;font-family:Georgia,serif;color:#e8dcc4;">
-    <h2 style="color:#c9a14a;">Setup needed</h2>
-    <p>Edit <code>public/config.js</code> and paste your Supabase URL and anon key.</p></div>`;
+  document.body.innerHTML = `
+    <div style="padding:40px;text-align:center;font-family:Georgia,serif;color:#e8dcc4;">
+      <h2 style="color:#c9a14a;">Setup needed</h2>
+      <p>Edit <code>public/config.js</code> and paste your Supabase URL and anon key.</p>
+    </div>`;
   throw new Error("Supabase config missing.");
 }
 
@@ -16,56 +18,62 @@ const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true }
 });
 
-// Caps (validation)
-const CAPS = {
-  captain: { level: 600, stars: 7 },
-  artifact: { level: 60, stars: 5, petals: 4 },
-  hero: { level: 600, stars: 7 }
-};
-
 // ------------------------------------------------------
 // State
 // ------------------------------------------------------
 const state = {
-  user: null,
-  profile: null,
-  activeTab: "my-roster",
-  filterUserId: null,
-  profiles: [],
-  captainRoster: [],   // [{id, name, sort_order, is_custom}]
-  artifactRoster: [],  // [{id, name, sort_order}]
+  user: null,           // auth user
+  profile: null,        // profiles row
+  activeTab: "captains",
+  filterUserId: null,   // null = "me", or another user's id
+  profiles: [],         // all profiles, for compare + filter dropdown
+  data: {
+    captains: [],       // all captain_snapshots for current view
+    hero: [],
+    artifacts: []
+  },
   signupMode: false
 };
 
 // ------------------------------------------------------
-// Helpers
+// DOM helpers
 // ------------------------------------------------------
-const $ = (s) => document.querySelector(s);
-const $$ = (s) => Array.from(document.querySelectorAll(s));
-const show = (el) => el.classList.remove("hidden");
-const hide = (el) => el.classList.add("hidden");
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+function show(el) { el.classList.remove("hidden"); }
+function hide(el) { el.classList.add("hidden"); }
 function escapeHtml(s) {
   if (s == null) return "";
-  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+function fmtNum(n) {
+  if (n == null || n === "") return "—";
+  const num = Number(n);
+  if (Number.isNaN(num)) return "—";
+  return num.toLocaleString();
 }
 function fmtDate(iso) {
-  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
-function viewedUserId() { return state.filterUserId || state.user.id; }
 
 // ------------------------------------------------------
-// Auth (unchanged from v1)
+// Auth flow
 // ------------------------------------------------------
 function setAuthMode(mode) {
   state.signupMode = mode === "signup";
   $("#auth-title").textContent = state.signupMode ? "Create account" : "Sign in";
-  $("#auth-sub").textContent = state.signupMode ? "Forge your name in the ledger." : "Welcome back, captain.";
+  $("#auth-sub").textContent = state.signupMode
+    ? "Forge your name in the ledger."
+    : "Welcome back, captain.";
   $("#auth-submit").textContent = state.signupMode ? "Create account" : "Sign in";
   $("#auth-toggle-text").textContent = state.signupMode ? "Already have an account?" : "No account?";
   $("#auth-toggle-link").textContent = state.signupMode ? "Sign in" : "Sign up";
   $$(".signup-only").forEach(el => state.signupMode ? show(el) : hide(el));
-  hide($("#auth-msg"));
+  hideAuthMsg();
 }
 
 function showAuthMsg(text, kind = "error") {
@@ -73,30 +81,48 @@ function showAuthMsg(text, kind = "error") {
   el.textContent = text;
   el.className = `msg ${kind}`;
 }
+function hideAuthMsg() { hide($("#auth-msg")); }
 
 async function handleAuthSubmit() {
   const email = $("#auth-email").value.trim();
   const password = $("#auth-password").value;
-  if (!email || !password) return showAuthMsg("Email and password required.");
+  if (!email || !password) {
+    showAuthMsg("Email and password required.");
+    return;
+  }
   const btn = $("#auth-submit");
   btn.disabled = true;
+
   try {
     if (state.signupMode) {
       const username = $("#auth-username").value.trim();
       const code = $("#auth-code").value.trim();
-      if (!username || username.length < 2) return showAuthMsg("Username must be at least 2 characters.");
-      if (!code) return showAuthMsg("Group code required.");
+      if (!username || username.length < 2) {
+        showAuthMsg("Username must be at least 2 characters.");
+        return;
+      }
+      if (!code) {
+        showAuthMsg("Group code required.");
+        return;
+      }
 
+      // Verify group code first
       const { data: codeOk, error: codeErr } = await sb.rpc("verify_signup_code", { code_attempt: code });
-      if (codeErr) return showAuthMsg("Could not verify code: " + codeErr.message);
-      if (!codeOk) return showAuthMsg("Invalid group code.");
+      if (codeErr) { showAuthMsg("Could not verify code: " + codeErr.message); return; }
+      if (!codeOk) { showAuthMsg("Invalid group code."); return; }
 
-      const { error } = await sb.auth.signUp({ email, password, options: { data: { username } } });
-      if (error) return showAuthMsg(error.message);
+      // Sign up with metadata so the trigger can pick up the username
+      const { error } = await sb.auth.signUp({
+        email,
+        password,
+        options: { data: { username } }
+      });
+      if (error) { showAuthMsg(error.message); return; }
       showAuthMsg("Check your email to confirm your account.", "info");
     } else {
       const { error } = await sb.auth.signInWithPassword({ email, password });
-      if (error) return showAuthMsg(error.message);
+      if (error) { showAuthMsg(error.message); return; }
+      // Session change handler will load the app
     }
   } finally {
     btn.disabled = false;
@@ -110,84 +136,99 @@ async function handleSignOut() {
   showAuthScreen();
 }
 
+// ------------------------------------------------------
+// Boot / session handling
+// ------------------------------------------------------
+async function boot() {
+  // Wire up auth screen
+  $("#auth-submit").addEventListener("click", handleAuthSubmit);
+  $("#auth-toggle-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    setAuthMode(state.signupMode ? "signin" : "signup");
+  });
+  $("#signout-btn").addEventListener("click", handleSignOut);
+  $("#admin-btn").addEventListener("click", openAdminModal);
+
+  // Tabs
+  $$(".tab").forEach(tab => {
+    tab.addEventListener("click", () => switchTab(tab.dataset.tab));
+  });
+
+  // Add buttons
+  $("#add-captain-btn").addEventListener("click", () => openCaptainModal());
+  $("#update-hero-btn").addEventListener("click", () => openHeroModal());
+  $("#add-artifact-btn").addEventListener("click", () => openArtifactModal());
+
+  // Filter
+  $("#user-filter").addEventListener("change", (e) => {
+    state.filterUserId = e.target.value === "me" ? null : e.target.value;
+    refreshActiveTab();
+  });
+
+  setAuthMode("signin");
+
+  const { data } = await sb.auth.getSession();
+  if (data.session) {
+    await loadProfileAndApp();
+  } else {
+    showAuthScreen();
+  }
+
+  sb.auth.onAuthStateChange(async (event, session) => {
+    if (event === "SIGNED_IN" && session) {
+      await loadProfileAndApp();
+    } else if (event === "SIGNED_OUT") {
+      showAuthScreen();
+    }
+  });
+}
+
 function showAuthScreen() {
   show($("#auth-screen"));
   hide($("#main-screen"));
   hide($("#user-bar"));
 }
 
-// ------------------------------------------------------
-// Boot
-// ------------------------------------------------------
-async function boot() {
-  $("#auth-submit").addEventListener("click", handleAuthSubmit);
-  $("#auth-toggle-link").addEventListener("click", e => { e.preventDefault(); setAuthMode(state.signupMode ? "signin" : "signup"); });
-  $("#signout-btn").addEventListener("click", handleSignOut);
-  $("#admin-btn").addEventListener("click", openAdminModal);
-
-  $$(".tab").forEach(tab => tab.addEventListener("click", () => switchTab(tab.dataset.tab)));
-  $("#user-filter").addEventListener("change", e => {
-    state.filterUserId = e.target.value === "me" ? null : e.target.value;
-    refreshActiveTab();
-  });
-
-  $("#save-captains-btn").addEventListener("click", saveCaptainsForm);
-  $("#save-captains-btn-2").addEventListener("click", saveCaptainsForm);
-  $("#save-artifacts-btn").addEventListener("click", saveArtifactsForm);
-  $("#save-artifacts-btn-2").addEventListener("click", saveArtifactsForm);
-
-  setAuthMode("signin");
-
-  const { data } = await sb.auth.getSession();
-  if (data.session) await loadProfileAndApp();
-  else showAuthScreen();
-
-  sb.auth.onAuthStateChange(async (event, session) => {
-    if (event === "SIGNED_IN" && session) await loadProfileAndApp();
-    else if (event === "SIGNED_OUT") showAuthScreen();
-  });
-}
-
 async function loadProfileAndApp() {
   const { data: { user } } = await sb.auth.getUser();
-  if (!user) return showAuthScreen();
+  if (!user) { showAuthScreen(); return; }
   state.user = user;
 
+  // Wait for profile row (created by trigger)
   let profile = null;
   for (let i = 0; i < 5; i++) {
-    const { data } = await sb.from("profiles").select("*").eq("id", user.id).single();
+    const { data, error } = await sb.from("profiles").select("*").eq("id", user.id).single();
     if (data) { profile = data; break; }
     await new Promise(r => setTimeout(r, 400));
   }
-  if (!profile) return showAuthMsg("Profile not found. Sign out and back in.", "error");
+  if (!profile) {
+    showAuthMsg("Profile not found. Try signing out and back in.", "error");
+    return;
+  }
   state.profile = profile;
 
+  // Show app
   hide($("#auth-screen"));
   show($("#main-screen"));
   show($("#user-bar"));
   $("#user-display").textContent = profile.username;
   if (profile.is_admin) show($("#admin-btn")); else hide($("#admin-btn"));
 
-  await Promise.all([loadAllProfiles(), loadRosters()]);
+  await loadAllProfiles();
   await refreshActiveTab();
 }
 
 async function loadAllProfiles() {
-  const { data } = await sb.from("profiles").select("id, username, is_admin").order("username");
+  const { data, error } = await sb.from("profiles").select("id, username, is_admin").order("username");
+  if (error) { console.error(error); return; }
   state.profiles = data || [];
+  // Populate filter
   const sel = $("#user-filter");
   sel.innerHTML = `<option value="me">My roster</option>` +
-    state.profiles.filter(p => p.id !== state.user.id)
-      .map(p => `<option value="${p.id}">${escapeHtml(p.username)}</option>`).join("");
-}
-
-async function loadRosters() {
-  const [c, a] = await Promise.all([
-    sb.from("captain_roster").select("*").order("sort_order"),
-    sb.from("artifact_roster").select("*").order("sort_order")
-  ]);
-  state.captainRoster = c.data || [];
-  state.artifactRoster = a.data || [];
+    state.profiles
+      .filter(p => p.id !== state.user.id)
+      .map(p => `<option value="${p.id}">${escapeHtml(p.username)}</option>`)
+      .join("");
 }
 
 // ------------------------------------------------------
@@ -204,479 +245,460 @@ function switchTab(tab) {
 async function refreshActiveTab() {
   if (!state.user) return;
   switch (state.activeTab) {
-    case "my-roster": return renderMyRoster();
-    case "update-captains": return renderCaptainsForm();
-    case "update-artifacts": return renderArtifactsForm();
+    case "captains": return renderCaptains();
+    case "hero": return renderHero();
+    case "artifacts": return renderArtifacts();
     case "compare": return renderCompare();
   }
 }
 
-// ------------------------------------------------------
-// Fetch latest snapshots for a user
-// ------------------------------------------------------
-async function getLatestSnapshots(userId) {
-  // Use Promise.all to parallelize
-  const [cap, art, hero] = await Promise.all([
-    sb.from("captain_snapshots").select("*").eq("user_id", userId).order("recorded_at", { ascending: false }),
-    sb.from("artifact_snapshots").select("*").eq("user_id", userId).order("recorded_at", { ascending: false }),
-    sb.from("hero_snapshots").select("*").eq("user_id", userId).order("recorded_at", { ascending: false })
-  ]);
-
-  // Group by captain_id / artifact_id, taking the first (latest) for each
-  const latestCaptain = new Map();
-  for (const s of cap.data || []) {
-    if (!latestCaptain.has(s.captain_id)) latestCaptain.set(s.captain_id, s);
-  }
-  const latestArtifact = new Map();
-  for (const s of art.data || []) {
-    if (!latestArtifact.has(s.artifact_id)) latestArtifact.set(s.artifact_id, s);
-  }
-  const latestHero = (hero.data || [])[0] || null;
-
-  // Also keep all history for sparkline
-  const captainHistory = new Map(); // id -> [snapshots desc]
-  for (const s of cap.data || []) {
-    if (!captainHistory.has(s.captain_id)) captainHistory.set(s.captain_id, []);
-    captainHistory.get(s.captain_id).push(s);
-  }
-  const artifactHistory = new Map();
-  for (const s of art.data || []) {
-    if (!artifactHistory.has(s.artifact_id)) artifactHistory.set(s.artifact_id, []);
-    artifactHistory.get(s.artifact_id).push(s);
-  }
-
-  return { latestCaptain, latestArtifact, latestHero, captainHistory, artifactHistory, heroHistory: hero.data || [] };
+function viewedUserId() {
+  return state.filterUserId || state.user.id;
 }
 
 // ------------------------------------------------------
-// MY ROSTER tab — show latest level/stars per item
+// Snapshot fetching helpers
 // ------------------------------------------------------
-async function renderMyRoster() {
+async function fetchAllSnapshots(table, userId) {
+  const { data, error } = await sb
+    .from(table)
+    .select("*")
+    .eq("user_id", userId)
+    .order("recorded_at", { ascending: false });
+  if (error) { console.error(error); return []; }
+  return data || [];
+}
+
+// Group snapshots by item name, returning latest + history per item
+function groupByName(snapshots, nameField) {
+  const map = new Map();
+  for (const s of snapshots) {
+    const key = s[nameField];
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(s);
+  }
+  // Each item's array is already sorted desc by recorded_at because of the ORDER BY
+  return map;
+}
+
+// ------------------------------------------------------
+// CAPTAINS
+// ------------------------------------------------------
+async function renderCaptains() {
   const userId = viewedUserId();
-  const data = await getLatestSnapshots(userId);
+  const snapshots = await fetchAllSnapshots("captain_snapshots", userId);
+  const grouped = groupByName(snapshots, "captain_name");
+  const list = $("#captains-list");
+  const isMine = userId === state.user.id;
 
-  // Hero
-  const heroEl = $("#hero-card-container");
-  if (data.latestHero) {
-    heroEl.innerHTML = `
-      <div class="card-grid">
-        ${renderItemCard({
-          name: "Hero",
-          latest: data.latestHero,
-          history: data.heroHistory,
-          kind: "hero"
-        })}
-      </div>`;
-  } else {
-    heroEl.innerHTML = `<div class="empty-state">No hero recorded yet.${userId === state.user.id ? " Use the Update tab." : ""}</div>`;
+  // Hide add button when viewing someone else's roster
+  $("#add-captain-btn").style.display = isMine ? "" : "none";
+
+  if (grouped.size === 0) {
+    list.innerHTML = `<div class="empty-state">No captains recorded yet.${isMine ? ' Click "Add captain" to start.' : ""}</div>`;
+    return;
   }
 
-  // Captains
-  const capList = $("#captains-list");
-  if (data.latestCaptain.size === 0) {
-    capList.innerHTML = `<div class="empty-state">No captains recorded yet.${userId === state.user.id ? " Use the Update tab." : ""}</div>`;
-  } else {
-    capList.innerHTML = state.captainRoster
-      .filter(r => data.latestCaptain.has(r.id))
-      .map(r => renderItemCard({
-        name: r.name,
-        latest: data.latestCaptain.get(r.id),
-        history: data.captainHistory.get(r.id) || [],
-        kind: "captain"
-      })).join("");
+  list.innerHTML = "";
+  for (const [name, snaps] of grouped) {
+    const latest = snaps[0];
+    const prev = snaps[1];
+    list.appendChild(renderItemCard({
+      name,
+      latest,
+      prev,
+      isMine,
+      kind: "captain",
+      stats: [
+        { label: "Level", value: latest.level },
+        { label: "Power", value: fmtNum(latest.power) }
+      ],
+      notes: latest.gear_notes,
+      history: snaps
+    }));
   }
-
-  // Artifacts
-  const artList = $("#artifacts-list");
-  if (data.latestArtifact.size === 0) {
-    artList.innerHTML = `<div class="empty-state">No artifacts recorded yet.${userId === state.user.id ? " Use the Update tab." : ""}</div>`;
-  } else {
-    artList.innerHTML = state.artifactRoster
-      .filter(r => data.latestArtifact.has(r.id))
-      .map(r => renderItemCard({
-        name: r.name,
-        latest: data.latestArtifact.get(r.id),
-        history: data.artifactHistory.get(r.id) || [],
-        kind: "artifact"
-      })).join("");
-  }
-}
-
-function renderItemCard({ name, latest, history, kind }) {
-  const prev = history[1];
-  const levelDelta = (prev && latest.level != null && prev.level != null)
-    ? latest.level - prev.level : 0;
-  const starsDelta = (prev && latest.stars != null && prev.stars != null)
-    ? latest.stars - prev.stars : 0;
-
-  const deltaTag = (d) => d > 0 ? ` <span class="delta-up">▲ ${d}</span>` : (d < 0 ? ` <span class="delta-down">▼ ${Math.abs(d)}</span>` : "");
-
-  // Artifacts: show stars as "4★ + 1 petal" combined
-  let starsRow;
-  if (kind === "artifact") {
-    const starsText = `${latest.stars ?? "—"}${latest.petals != null && latest.petals > 0 ? ` + ${latest.petals}/5` : ""}`;
-    starsRow = `<div class="stat-row"><span class="lbl">Stars</span><span>${starsText}${deltaTag(starsDelta)}</span></div>`;
-  } else {
-    starsRow = `<div class="stat-row"><span class="lbl">Stars</span><span>${latest.stars ?? "—"}${deltaTag(starsDelta)}</span></div>`;
-  }
-
-  return `
-    <div class="card">
-      <div class="card-head">
-        <div><div class="card-name">${escapeHtml(name)}</div></div>
-      </div>
-      <div class="stat-row"><span class="lbl">Level</span><span>${latest.level ?? "—"}${deltaTag(levelDelta)}</span></div>
-      ${starsRow}
-      <div class="stat-row" style="margin-top:6px;"><span class="lbl">Updated</span><span>${fmtDate(latest.recorded_at)}</span></div>
-      ${renderSparkline(history)}
-      ${history.length > 1 ? `<div class="card-actions">
-        <button class="ghost-btn small" onclick="window.tbShowHistory('${kind}', ${latest[kind === 'hero' ? 'id' : kind+'_id'] || 'null'}, '${escapeHtml(name)}')">History (${history.length})</button>
-      </div>` : ""}
-    </div>`;
-}
-
-function renderSparkline(history) {
-  if (!history || history.length < 2) return "";
-  const values = history.slice().reverse().map(s => Number(s.level || 0));
-  if (values.length < 2 || values.every(v => v === values[0])) return "";
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-  const w = 260, h = 36;
-  const stepX = w / (values.length - 1);
-  const points = values.map((v, i) => `${(i*stepX).toFixed(1)},${(h - ((v-min)/range)*h).toFixed(1)}`).join(" ");
-  return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-    <polyline fill="none" stroke="var(--gold)" stroke-width="1.5" points="${points}"/></svg>`;
-}
-
-// History modal
-window.tbShowHistory = async function(kind, id, name) {
-  // Refetch full history for this item
-  const tableMap = { captain: "captain_snapshots", artifact: "artifact_snapshots", hero: "hero_snapshots" };
-  const fkMap = { captain: "captain_id", artifact: "artifact_id" };
-  let q = sb.from(tableMap[kind]).select("*").eq("user_id", viewedUserId()).order("recorded_at", { ascending: false });
-  if (kind !== "hero") q = q.eq(fkMap[kind], id);
-  const { data } = await q;
-  const rows = (data || []).map((h, i) => {
-    const next = data[i+1];
-    let delta = "";
-    if (next && h.level != null && next.level != null) {
-      const d = h.level - next.level;
-      if (d > 0) delta = `<span class="delta-up">+${d}</span>`;
-      else if (d < 0) delta = `<span class="delta-down">${d}</span>`;
-    }
-    return `<div class="history-row"><span>${fmtDate(h.recorded_at)}</span><span>L ${h.level ?? "—"} · ★ ${h.stars ?? "—"} ${delta}</span></div>`;
-  }).join("");
-  $("#modal").innerHTML = `<h3>${escapeHtml(name)} — history</h3>
-    <div class="history-list">${rows}</div>
-    <div class="modal-actions"><button class="primary-btn" onclick="document.getElementById('modal-backdrop').classList.add('hidden')">Close</button></div>`;
-  show($("#modal-backdrop"));
-};
-
-$("#modal-backdrop").addEventListener("click", e => {
-  if (e.target.id === "modal-backdrop") hide($("#modal-backdrop"));
-});
-
-// ------------------------------------------------------
-// UPDATE CAPTAINS tab — Hero + Captains survey
-// ------------------------------------------------------
-async function renderCaptainsForm() {
-  const data = await getLatestSnapshots(state.user.id);
-  const container = $("#captains-form-container");
-
-  const heroLatest = data.latestHero;
-  const heroSection = `
-    <div class="survey-section">
-      <h3 class="section-h">Hero</h3>
-      <div class="survey-header">
-        <span></span><span class="col-r">Level</span><span class="col-r">Stars</span>
-      </div>
-      <div class="survey-row" data-kind="hero" data-id="hero">
-        <div>
-          <div class="row-label">Hero</div>
-          ${heroLatest ? `<span class="row-last">Last: L${heroLatest.level ?? "—"} · ★${heroLatest.stars ?? "—"} · ${fmtDate(heroLatest.recorded_at)}</span>` : `<span class="row-last">No entries yet</span>`}
-        </div>
-        <input type="number" min="1" max="${CAPS.hero.level}" step="1" data-field="level" value="${heroLatest?.level ?? ""}" placeholder="—" />
-        <input type="number" min="1" max="${CAPS.hero.stars}" step="1" data-field="stars" value="${heroLatest?.stars ?? ""}" placeholder="—" />
-      </div>
-    </div>`;
-
-  const captainsSection = `
-    <div class="survey-section">
-      <h3 class="section-h">Captains</h3>
-      <div class="survey-header">
-        <span></span><span class="col-r">Level (1-${CAPS.captain.level})</span><span class="col-r">Stars (1-${CAPS.captain.stars})</span>
-      </div>
-      ${state.captainRoster.map(r => {
-        const latest = data.latestCaptain.get(r.id);
-        return `<div class="survey-row" data-kind="captain" data-id="${r.id}">
-          <div>
-            <div class="row-label">${escapeHtml(r.name)}</div>
-            ${latest ? `<span class="row-last">Last: L${latest.level ?? "—"} · ★${latest.stars ?? "—"} · ${fmtDate(latest.recorded_at)}</span>` : `<span class="row-last">No entries yet</span>`}
-          </div>
-          <input type="number" min="1" max="${CAPS.captain.level}" step="1" data-field="level" value="${latest?.level ?? ""}" placeholder="—" />
-          <input type="number" min="1" max="${CAPS.captain.stars}" step="1" data-field="stars" value="${latest?.stars ?? ""}" placeholder="—" />
-        </div>`;
-      }).join("")}
-    </div>`;
-
-  container.innerHTML = heroSection + captainsSection;
-  container.querySelectorAll("input[type=number]").forEach(input => {
-    input.addEventListener("input", () => validateInput(input));
-    input.addEventListener("blur", () => validateInput(input));
-  });
 }
 
 // ------------------------------------------------------
-// UPDATE ARTIFACTS tab
+// HERO
 // ------------------------------------------------------
-async function renderArtifactsForm() {
-  const data = await getLatestSnapshots(state.user.id);
-  const container = $("#artifacts-form-container");
+async function renderHero() {
+  const userId = viewedUserId();
+  const snapshots = await fetchAllSnapshots("hero_snapshots", userId);
+  const isMine = userId === state.user.id;
+  $("#update-hero-btn").style.display = isMine ? "" : "none";
 
-  container.innerHTML = `
-    <div class="survey-section">
-      <h3 class="section-h">Artifacts</h3>
-      <div class="survey-header survey-header-3">
-        <span></span>
-        <span class="col-r">Level (1-${CAPS.artifact.level})</span>
-        <span class="col-r">Stars (0-${CAPS.artifact.stars})</span>
-        <span class="col-r">Petals (0-${CAPS.artifact.petals})</span>
-      </div>
-      ${state.artifactRoster.map(r => {
-        const latest = data.latestArtifact.get(r.id);
-        const lastSummary = latest
-          ? `Last: L${latest.level ?? "—"} · ${latest.stars ?? "—"}★${latest.petals != null && latest.petals > 0 ? ` +${latest.petals}p` : ""} · ${fmtDate(latest.recorded_at)}`
-          : "No entries yet";
-        return `<div class="survey-row survey-row-3" data-kind="artifact" data-id="${r.id}">
-          <div>
-            <div class="row-label">${escapeHtml(r.name)}</div>
-            <span class="row-last">${lastSummary}</span>
-          </div>
-          <input type="number" min="1" max="${CAPS.artifact.level}" step="1" data-field="level" value="${latest?.level ?? ""}" placeholder="—" />
-          <input type="number" min="0" max="${CAPS.artifact.stars}" step="1" data-field="stars" value="${latest?.stars ?? ""}" placeholder="—" />
-          <input type="number" min="0" max="${CAPS.artifact.petals}" step="1" data-field="petals" value="${latest?.petals ?? ""}" placeholder="0" />
-        </div>`;
-      }).join("")}
-    </div>`;
-
-  container.querySelectorAll("input[type=number]").forEach(input => {
-    input.addEventListener("input", () => validateInput(input));
-    input.addEventListener("blur", () => validateInput(input));
-  });
-}
-
-function validateInput(input) {
-  const val = input.value.trim();
-  if (val === "") { input.classList.remove("invalid"); return true; }
-  const n = Number(val);
-  const min = Number(input.min);
-  const max = Number(input.max);
-  if (!Number.isInteger(n) || n < min || n > max) {
-    input.classList.add("invalid");
-    return false;
+  const display = $("#hero-display");
+  if (snapshots.length === 0) {
+    display.innerHTML = `<div class="empty-state">No hero recorded yet.${isMine ? " Click \"+ New snapshot\" to start." : ""}</div>`;
+    return;
   }
-  input.classList.remove("invalid");
-  return true;
+
+  const latest = snapshots[0];
+  const prev = snapshots[1];
+
+  display.innerHTML = "";
+  display.appendChild(renderItemCard({
+    name: latest.hero_name,
+    latest,
+    prev,
+    isMine,
+    kind: "hero",
+    stats: [
+      { label: "Level", value: latest.level },
+      { label: "Stars", value: latest.stars },
+      { label: "Power", value: fmtNum(latest.power) }
+    ],
+    notes: latest.gear_notes,
+    history: snapshots
+  }));
 }
 
-async function saveCaptainsForm() {
-  const rows = $$("#captains-form-container .survey-row");
-  await processSave(rows, "save-captains-msg", () => renderCaptainsForm());
+// ------------------------------------------------------
+// ARTIFACTS
+// ------------------------------------------------------
+async function renderArtifacts() {
+  const userId = viewedUserId();
+  const snapshots = await fetchAllSnapshots("artifact_snapshots", userId);
+  const grouped = groupByName(snapshots, "artifact_name");
+  const list = $("#artifacts-list");
+  const isMine = userId === state.user.id;
+  $("#add-artifact-btn").style.display = isMine ? "" : "none";
+
+  if (grouped.size === 0) {
+    list.innerHTML = `<div class="empty-state">No artifacts recorded yet.${isMine ? ' Click "Add artifact" to start.' : ""}</div>`;
+    return;
+  }
+
+  list.innerHTML = "";
+  for (const [name, snaps] of grouped) {
+    const latest = snaps[0];
+    const prev = snaps[1];
+    list.appendChild(renderItemCard({
+      name,
+      latest,
+      prev,
+      isMine,
+      kind: "artifact",
+      stats: [
+        { label: "Level", value: latest.level },
+        { label: "Stars", value: latest.stars }
+      ],
+      notes: latest.notes,
+      history: snaps
+    }));
+  }
 }
 
-async function saveArtifactsForm() {
-  const rows = $$("#artifacts-form-container .survey-row");
-  await processSave(rows, "save-artifacts-msg", () => renderArtifactsForm());
-}
+// ------------------------------------------------------
+// Item card renderer (shared across captains/hero/artifacts)
+// ------------------------------------------------------
+function renderItemCard({ name, latest, prev, isMine, kind, stats, notes, history }) {
+  const card = document.createElement("div");
+  card.className = "card";
 
-async function processSave(rows, msgElId, refreshFn) {
-  const inserts = { captain: [], artifact: [], hero: [] };
-  let invalidCount = 0;
-  const data = await getLatestSnapshots(state.user.id);
-
-  for (const row of rows) {
-    const kind = row.dataset.kind;
-    const id = row.dataset.id;
-    const levelInput = row.querySelector('[data-field="level"]');
-    const starsInput = row.querySelector('[data-field="stars"]');
-    const petalsInput = row.querySelector('[data-field="petals"]');
-
-    if (!validateInput(levelInput) || !validateInput(starsInput) || (petalsInput && !validateInput(petalsInput))) {
-      invalidCount++;
-      continue;
-    }
-
-    const lvlRaw = levelInput.value.trim();
-    const starsRaw = starsInput.value.trim();
-    const petalsRaw = petalsInput ? petalsInput.value.trim() : "";
-
-    if (lvlRaw === "" && starsRaw === "" && petalsRaw === "") continue;
-
-    const level = lvlRaw === "" ? null : Number(lvlRaw);
-    const stars = starsRaw === "" ? null : Number(starsRaw);
-    const petals = petalsRaw === "" ? null : Number(petalsRaw);
-
-    let prev = null;
-    if (kind === "hero") prev = data.latestHero;
-    else if (kind === "captain") prev = data.latestCaptain.get(Number(id));
-    else if (kind === "artifact") prev = data.latestArtifact.get(Number(id));
-
-    if (prev && prev.level === level && prev.stars === stars) {
-      if (kind === "artifact") {
-        if ((prev.petals ?? null) === petals) continue;
-      } else {
-        continue;
+  const statsHtml = stats.map(s => {
+    let deltaHtml = "";
+    if (prev && s.label !== "" && typeof latest === "object") {
+      // Try to compute delta for numeric stats
+      const fieldMap = {
+        "Level": "level", "Stars": "stars", "Power": "power"
+      };
+      const field = fieldMap[s.label];
+      if (field && latest[field] != null && prev[field] != null) {
+        const d = Number(latest[field]) - Number(prev[field]);
+        if (d > 0) deltaHtml = ` <span class="delta-up">▲ ${fmtNum(d)}</span>`;
+        else if (d < 0) deltaHtml = ` <span class="delta-down">▼ ${fmtNum(Math.abs(d))}</span>`;
       }
     }
+    return `<div class="stat-row"><span class="lbl">${s.label}</span><span>${escapeHtml(String(s.value ?? "—"))}${deltaHtml}</span></div>`;
+  }).join("");
 
-    if (kind === "hero") {
-      inserts.hero.push({ user_id: state.user.id, level, stars });
-    } else if (kind === "captain") {
-      inserts.captain.push({ user_id: state.user.id, captain_id: Number(id), level, stars });
-    } else if (kind === "artifact") {
-      inserts.artifact.push({ user_id: state.user.id, artifact_id: Number(id), level, stars, petals });
-    }
+  const ownerName = isMine ? "" : (state.profiles.find(p => p.id === latest.user_id)?.username || "");
+
+  card.innerHTML = `
+    <div class="card-head">
+      <div>
+        <div class="card-name">${escapeHtml(name)}</div>
+        ${ownerName ? `<div class="card-owner">${escapeHtml(ownerName)}</div>` : ""}
+      </div>
+    </div>
+    ${statsHtml}
+    ${notes ? `<div class="stat-row" style="margin-top:6px;"><span class="lbl">Notes</span></div><div style="font-size:13px;color:var(--text-dim);font-style:italic;">${escapeHtml(notes)}</div>` : ""}
+    <div class="stat-row" style="margin-top:8px;"><span class="lbl">Updated</span><span>${fmtDate(latest.recorded_at)}</span></div>
+    ${renderSparkline(history)}
+    <div class="card-actions">
+      <button class="ghost-btn small" data-action="history">History (${history.length})</button>
+      ${isMine ? `<button class="primary-btn small" data-action="update">Update</button>` : ""}
+      ${isMine ? `<button class="danger-btn small" data-action="delete-snap">Delete latest</button>` : ""}
+    </div>
+  `;
+
+  card.querySelector('[data-action="history"]').addEventListener("click", () => openHistoryModal(name, history, kind));
+  if (isMine) {
+    card.querySelector('[data-action="update"]').addEventListener("click", () => {
+      if (kind === "captain") openCaptainModal({ prefill: latest });
+      else if (kind === "hero") openHeroModal({ prefill: latest });
+      else if (kind === "artifact") openArtifactModal({ prefill: latest });
+    });
+    card.querySelector('[data-action="delete-snap"]').addEventListener("click", async () => {
+      if (!confirm(`Delete latest snapshot of ${name}? (history is kept)`)) return;
+      const tableMap = { captain: "captain_snapshots", hero: "hero_snapshots", artifact: "artifact_snapshots" };
+      const { error } = await sb.from(tableMap[kind]).delete().eq("id", latest.id);
+      if (error) alert(error.message);
+      else refreshActiveTab();
+    });
   }
 
-  const msgEl = document.getElementById(msgElId);
-  msgEl.classList.remove("hidden", "error", "info");
-  msgEl.classList.add("msg");
+  return card;
+}
 
-  if (invalidCount > 0) {
-    msgEl.textContent = `${invalidCount} field(s) have invalid values. Check the highlighted rows.`;
-    msgEl.classList.add("error");
-    return;
-  }
-
-  const totalInserts = inserts.captain.length + inserts.artifact.length + inserts.hero.length;
-  if (totalInserts === 0) {
-    msgEl.textContent = "No changes to save.";
-    msgEl.classList.add("info");
-    return;
-  }
-
-  const promises = [];
-  if (inserts.captain.length) promises.push(sb.from("captain_snapshots").insert(inserts.captain));
-  if (inserts.artifact.length) promises.push(sb.from("artifact_snapshots").insert(inserts.artifact));
-  if (inserts.hero.length) promises.push(sb.from("hero_snapshots").insert(inserts.hero));
-
-  const results = await Promise.all(promises);
-  const errors = results.filter(r => r.error);
-  if (errors.length) {
-    msgEl.textContent = "Save failed: " + errors[0].error.message;
-    msgEl.classList.add("error");
-    return;
-  }
-
-  msgEl.textContent = `Saved ${totalInserts} update(s).`;
-  msgEl.classList.add("info");
-  setTimeout(() => refreshFn(), 800);
+// Tiny inline SVG sparkline for power over time
+function renderSparkline(history) {
+  if (!history || history.length < 2) return "";
+  const powers = history.map(s => Number(s.power || s.level || 0)).filter(n => !Number.isNaN(n));
+  if (powers.length < 2) return "";
+  const ordered = [...powers].reverse(); // oldest -> newest
+  const min = Math.min(...ordered);
+  const max = Math.max(...ordered);
+  const range = max - min || 1;
+  const w = 260, h = 36;
+  const stepX = w / (ordered.length - 1);
+  const points = ordered.map((v, i) => {
+    const x = i * stepX;
+    const y = h - ((v - min) / range) * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polyline fill="none" stroke="var(--gold)" stroke-width="1.5" points="${points}"/>
+  </svg>`;
 }
 
 // ------------------------------------------------------
-// COMPARE tab
+// MODALS — captain / hero / artifact / history / admin
+// ------------------------------------------------------
+function openModal(html) {
+  $("#modal").innerHTML = html;
+  show($("#modal-backdrop"));
+}
+function closeModal() { hide($("#modal-backdrop")); }
+$("#modal-backdrop").addEventListener("click", (e) => {
+  if (e.target.id === "modal-backdrop") closeModal();
+});
+
+function openCaptainModal({ prefill = null } = {}) {
+  openModal(`
+    <h3>${prefill ? "Update" : "Add"} captain</h3>
+    <div class="field"><label>Captain name</label>
+      <input id="m-name" value="${escapeHtml(prefill?.captain_name || "")}" ${prefill ? "readonly" : ""}/></div>
+    <div class="field"><label>Level</label><input id="m-level" type="number" value="${prefill?.level ?? ""}"/></div>
+    <div class="field"><label>Power</label><input id="m-power" type="number" value="${prefill?.power ?? ""}"/></div>
+    <div class="field"><label>Gear notes (optional)</label><textarea id="m-notes" rows="2">${escapeHtml(prefill?.gear_notes || "")}</textarea></div>
+    <div class="modal-actions">
+      <button class="ghost-btn" id="m-cancel">Cancel</button>
+      <button class="primary-btn" id="m-save">Save snapshot</button>
+    </div>
+  `);
+  $("#m-cancel").addEventListener("click", closeModal);
+  $("#m-save").addEventListener("click", async () => {
+    const name = $("#m-name").value.trim();
+    if (!name) return alert("Captain name required.");
+    const row = {
+      user_id: state.user.id,
+      captain_name: name,
+      level: $("#m-level").value ? Number($("#m-level").value) : null,
+      power: $("#m-power").value ? Number($("#m-power").value) : null,
+      gear_notes: $("#m-notes").value.trim() || null
+    };
+    const { error } = await sb.from("captain_snapshots").insert(row);
+    if (error) return alert(error.message);
+    closeModal();
+    refreshActiveTab();
+  });
+}
+
+function openHeroModal({ prefill = null } = {}) {
+  openModal(`
+    <h3>${prefill ? "Update" : "Add"} hero snapshot</h3>
+    <div class="field"><label>Hero name</label>
+      <input id="m-name" value="${escapeHtml(prefill?.hero_name || "")}"/></div>
+    <div class="field"><label>Level</label><input id="m-level" type="number" value="${prefill?.level ?? ""}"/></div>
+    <div class="field"><label>Stars</label><input id="m-stars" type="number" value="${prefill?.stars ?? ""}"/></div>
+    <div class="field"><label>Power</label><input id="m-power" type="number" value="${prefill?.power ?? ""}"/></div>
+    <div class="field"><label>Gear notes (optional)</label><textarea id="m-notes" rows="2">${escapeHtml(prefill?.gear_notes || "")}</textarea></div>
+    <div class="modal-actions">
+      <button class="ghost-btn" id="m-cancel">Cancel</button>
+      <button class="primary-btn" id="m-save">Save snapshot</button>
+    </div>
+  `);
+  $("#m-cancel").addEventListener("click", closeModal);
+  $("#m-save").addEventListener("click", async () => {
+    const name = $("#m-name").value.trim();
+    if (!name) return alert("Hero name required.");
+    const row = {
+      user_id: state.user.id,
+      hero_name: name,
+      level: $("#m-level").value ? Number($("#m-level").value) : null,
+      stars: $("#m-stars").value ? Number($("#m-stars").value) : null,
+      power: $("#m-power").value ? Number($("#m-power").value) : null,
+      gear_notes: $("#m-notes").value.trim() || null
+    };
+    const { error } = await sb.from("hero_snapshots").insert(row);
+    if (error) return alert(error.message);
+    closeModal();
+    refreshActiveTab();
+  });
+}
+
+function openArtifactModal({ prefill = null } = {}) {
+  openModal(`
+    <h3>${prefill ? "Update" : "Add"} artifact</h3>
+    <div class="field"><label>Artifact name</label>
+      <input id="m-name" value="${escapeHtml(prefill?.artifact_name || "")}" ${prefill ? "readonly" : ""}/></div>
+    <div class="field"><label>Level</label><input id="m-level" type="number" value="${prefill?.level ?? ""}"/></div>
+    <div class="field"><label>Stars</label><input id="m-stars" type="number" value="${prefill?.stars ?? ""}"/></div>
+    <div class="field"><label>Notes (optional)</label><textarea id="m-notes" rows="2">${escapeHtml(prefill?.notes || "")}</textarea></div>
+    <div class="modal-actions">
+      <button class="ghost-btn" id="m-cancel">Cancel</button>
+      <button class="primary-btn" id="m-save">Save snapshot</button>
+    </div>
+  `);
+  $("#m-cancel").addEventListener("click", closeModal);
+  $("#m-save").addEventListener("click", async () => {
+    const name = $("#m-name").value.trim();
+    if (!name) return alert("Artifact name required.");
+    const row = {
+      user_id: state.user.id,
+      artifact_name: name,
+      level: $("#m-level").value ? Number($("#m-level").value) : null,
+      stars: $("#m-stars").value ? Number($("#m-stars").value) : null,
+      notes: $("#m-notes").value.trim() || null
+    };
+    const { error } = await sb.from("artifact_snapshots").insert(row);
+    if (error) return alert(error.message);
+    closeModal();
+    refreshActiveTab();
+  });
+}
+
+function openHistoryModal(name, history, kind) {
+  const rows = history.map((h, i) => {
+    const next = history[i + 1];
+    let delta = "";
+    if (next && h.power != null && next.power != null) {
+      const d = Number(h.power) - Number(next.power);
+      if (d > 0) delta = `<span class="delta-up">+${fmtNum(d)}</span>`;
+      else if (d < 0) delta = `<span class="delta-down">${fmtNum(d)}</span>`;
+    }
+    const fields = [];
+    if (h.level != null) fields.push(`L${h.level}`);
+    if (h.stars != null) fields.push(`★${h.stars}`);
+    if (h.power != null) fields.push(`P ${fmtNum(h.power)}`);
+    return `<div class="history-row"><span>${fmtDate(h.recorded_at)}</span><span>${fields.join(" · ")} ${delta}</span></div>`;
+  }).join("");
+
+  openModal(`
+    <h3>${escapeHtml(name)} — history</h3>
+    <div class="history-list">${rows}</div>
+    <div class="modal-actions">
+      <button class="primary-btn" id="m-close">Close</button>
+    </div>
+  `);
+  $("#m-close").addEventListener("click", closeModal);
+}
+
+// ------------------------------------------------------
+// Compare tab — side-by-side group view
 // ------------------------------------------------------
 async function renderCompare() {
   const container = $("#compare-content");
-  container.innerHTML = `<div class="muted">Loading…</div>`;
+  container.innerHTML = `<div class="muted">Loading group data…</div>`;
 
-  // Fetch all latest per user
-  const [capRes, artRes, heroRes] = await Promise.all([
+  // Fetch latest snapshot per (user, hero_name) etc.
+  const [captainsRes, heroRes, artifactsRes] = await Promise.all([
     sb.from("captain_snapshots").select("*").order("recorded_at", { ascending: false }),
-    sb.from("artifact_snapshots").select("*").order("recorded_at", { ascending: false }),
-    sb.from("hero_snapshots").select("*").order("recorded_at", { ascending: false })
+    sb.from("hero_snapshots").select("*").order("recorded_at", { ascending: false }),
+    sb.from("artifact_snapshots").select("*").order("recorded_at", { ascending: false })
   ]);
 
-  // Latest per (user, captain_id)
-  const userCaptain = new Map(); // userId -> Map(captainId -> snapshot)
-  for (const s of capRes.data || []) {
-    if (!userCaptain.has(s.user_id)) userCaptain.set(s.user_id, new Map());
-    const m = userCaptain.get(s.user_id);
-    if (!m.has(s.captain_id)) m.set(s.captain_id, s);
+  if (captainsRes.error || heroRes.error || artifactsRes.error) {
+    container.innerHTML = `<div class="empty-state">Could not load group data.</div>`;
+    return;
   }
 
-  const userArtifact = new Map();
-  for (const s of artRes.data || []) {
-    if (!userArtifact.has(s.user_id)) userArtifact.set(s.user_id, new Map());
-    const m = userArtifact.get(s.user_id);
-    if (!m.has(s.artifact_id)) m.set(s.artifact_id, s);
-  }
-
-  const userHero = new Map();
+  // Latest hero per user
+  const latestHero = new Map();
   for (const s of heroRes.data || []) {
-    if (!userHero.has(s.user_id)) userHero.set(s.user_id, s);
+    if (!latestHero.has(s.user_id)) latestHero.set(s.user_id, s);
   }
 
-  // Hero leaderboard
-  const heroBoard = state.profiles.map(p => ({
-    user: p,
-    snap: userHero.get(p.id)
-  })).filter(r => r.snap).sort((a, b) => (b.snap.level || 0) - (a.snap.level || 0));
+  // Captain count + total power per user (sum of latest per captain)
+  const userCaptains = new Map();
+  for (const s of captainsRes.data || []) {
+    if (!userCaptains.has(s.user_id)) userCaptains.set(s.user_id, new Map());
+    const m = userCaptains.get(s.user_id);
+    if (!m.has(s.captain_name)) m.set(s.captain_name, s);
+  }
 
-  // Captain matrix
-  const captainHeader = state.captainRoster.map(c => `<th>${escapeHtml(c.name)}</th>`).join("");
-  const captainRows = state.profiles.map(p => {
-    const cm = userCaptain.get(p.id) || new Map();
-    const cells = state.captainRoster.map(c => {
-      const snap = cm.get(c.id);
-      if (!snap) return `<td class="muted">—</td>`;
-      return `<td>L${snap.level ?? "—"} · ★${snap.stars ?? "—"}</td>`;
-    }).join("");
-    return `<tr><td><strong>${escapeHtml(p.username)}</strong></td>${cells}</tr>`;
-  }).join("");
+  const userArtifactsCount = new Map();
+  for (const s of artifactsRes.data || []) {
+    if (!userArtifactsCount.has(s.user_id)) userArtifactsCount.set(s.user_id, new Set());
+    userArtifactsCount.get(s.user_id).add(s.artifact_name);
+  }
 
-  // Artifact matrix
-  const artifactHeader = state.artifactRoster.map(a => `<th>${escapeHtml(a.name)}</th>`).join("");
-  const artifactRows = state.profiles.map(p => {
-    const am = userArtifact.get(p.id) || new Map();
-    const cells = state.artifactRoster.map(a => {
-      const snap = am.get(a.id);
-      if (!snap) return `<td class="muted">—</td>`;
-      const petalSuffix = snap.petals != null && snap.petals > 0 ? `+${snap.petals}p` : "";
-      return `<td>L${snap.level ?? "—"} · ${snap.stars ?? "—"}★${petalSuffix}</td>`;
-    }).join("");
-    return `<tr><td><strong>${escapeHtml(p.username)}</strong></td>${cells}</tr>`;
-  }).join("");
+  const rows = state.profiles.map(p => {
+    const hero = latestHero.get(p.id);
+    const cmap = userCaptains.get(p.id) || new Map();
+    let totalCaptainPower = 0;
+    for (const cs of cmap.values()) totalCaptainPower += Number(cs.power || 0);
+    const artCount = (userArtifactsCount.get(p.id) || new Set()).size;
+    const heroPower = Number(hero?.power || 0);
+    const totalPower = totalCaptainPower + heroPower;
+    return { p, hero, captainCount: cmap.size, totalCaptainPower, artCount, heroPower, totalPower };
+  }).sort((a, b) => b.totalPower - a.totalPower);
 
   container.innerHTML = `
-    <h3 class="section-h">Hero leaderboard</h3>
-    ${heroBoard.length === 0 ? `<div class="empty-state">No hero data yet.</div>` : `
-      <table class="compare-table">
-        <thead><tr><th>#</th><th>Player</th><th>Hero level</th><th>Stars</th><th>Updated</th></tr></thead>
-        <tbody>${heroBoard.map((r, i) => `
-          <tr><td>${i+1}</td><td><strong>${escapeHtml(r.user.username)}</strong></td>
-          <td>${r.snap.level ?? "—"}</td><td>${r.snap.stars ?? "—"}</td><td>${fmtDate(r.snap.recorded_at)}</td></tr>
-        `).join("")}</tbody>
-      </table>`}
-
-    <h3 class="section-h">Captains</h3>
-    <div style="overflow-x:auto;">
-      <table class="compare-table">
-        <thead><tr><th>Player</th>${captainHeader}</tr></thead>
-        <tbody>${captainRows}</tbody>
-      </table>
-    </div>
-
-    <h3 class="section-h">Artifacts</h3>
-    <div style="overflow-x:auto;">
-      <table class="compare-table">
-        <thead><tr><th>Player</th>${artifactHeader}</tr></thead>
-        <tbody>${artifactRows}</tbody>
-      </table>
-    </div>
+    <table class="compare-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Player</th>
+          <th>Hero</th>
+          <th>Hero power</th>
+          <th>Captains</th>
+          <th>Captain power</th>
+          <th>Artifacts</th>
+          <th>Total power</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((r, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${escapeHtml(r.p.username)}${r.p.is_admin ? ' <span style="color:var(--gold);font-size:11px;">(admin)</span>' : ""}</td>
+            <td>${r.hero ? escapeHtml(r.hero.hero_name) : "—"}</td>
+            <td>${fmtNum(r.heroPower) || "—"}</td>
+            <td>${r.captainCount}</td>
+            <td>${fmtNum(r.totalCaptainPower)}</td>
+            <td>${r.artCount}</td>
+            <td><strong>${fmtNum(r.totalPower)}</strong></td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+    <p class="muted" style="margin-top:14px;font-size:13px;">Total power = sum of latest captain powers + latest hero power. Artifacts not included since they don't have a power score.</p>
   `;
 }
 
 // ------------------------------------------------------
-// ADMIN modal — change signup code, manage users
+// Admin modal — change signup code, manage users
 // ------------------------------------------------------
 async function openAdminModal() {
   if (!state.profile?.is_admin) return;
 
   const { data: settings } = await sb.from("group_settings").select("signup_code").eq("id", 1).single();
 
-  $("#modal").innerHTML = `
+  openModal(`
     <h3>Admin</h3>
     <div class="field">
       <label>Group signup code</label>
@@ -690,15 +712,15 @@ async function openAdminModal() {
     <div class="modal-actions">
       <button class="primary-btn" id="m-close">Close</button>
     </div>
-  `;
-  show($("#modal-backdrop"));
+  `);
 
-  $("#m-close").addEventListener("click", () => hide($("#modal-backdrop")));
+  $("#m-close").addEventListener("click", closeModal);
   $("#m-save-code").addEventListener("click", async () => {
     const newCode = $("#m-code").value.trim();
     if (!newCode) return alert("Code can't be empty.");
     const { error } = await sb.from("group_settings")
-      .update({ signup_code: newCode, updated_at: new Date().toISOString() }).eq("id", 1);
+      .update({ signup_code: newCode, updated_at: new Date().toISOString() })
+      .eq("id", 1);
     if (error) return alert(error.message);
     alert("Code updated.");
   });
@@ -707,10 +729,12 @@ async function openAdminModal() {
   membersEl.innerHTML = state.profiles.map(p => `
     <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);">
       <span>${escapeHtml(p.username)}${p.is_admin ? ' <span style="color:var(--gold);">(admin)</span>' : ""}</span>
-      <span>${p.id !== state.user.id ? `
-        <button class="ghost-btn small" data-toggle-admin="${p.id}" data-was="${p.is_admin}">${p.is_admin ? "Remove admin" : "Make admin"}</button>
-        <button class="danger-btn small" data-remove="${p.id}">Remove</button>
-      ` : '<span class="muted">(you)</span>'}</span>
+      <span>
+        ${p.id !== state.user.id ? `
+          <button class="ghost-btn small" data-toggle-admin="${p.id}" data-was="${p.is_admin}">${p.is_admin ? "Remove admin" : "Make admin"}</button>
+          <button class="danger-btn small" data-remove="${p.id}">Remove</button>
+        ` : '<span class="muted">(you)</span>'}
+      </span>
     </div>
   `).join("");
 
@@ -721,7 +745,7 @@ async function openAdminModal() {
       const { error } = await sb.from("profiles").update({ is_admin: newVal }).eq("id", id);
       if (error) return alert(error.message);
       await loadAllProfiles();
-      openAdminModal();
+      openAdminModal(); // re-render
     });
   });
 
@@ -737,4 +761,7 @@ async function openAdminModal() {
   });
 }
 
+// ------------------------------------------------------
+// Boot
+// ------------------------------------------------------
 boot();
