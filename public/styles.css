@@ -509,6 +509,46 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* ============ ICONS ============ */
+.card-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  margin-right: 12px;
+  border: 1px solid var(--border-strong);
+  flex-shrink: 0;
+}
+
+.row-label-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.row-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  flex-shrink: 0;
+}
+
+.th-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 4px;
+  border: 1px solid var(--border-strong);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
 /* ============ SECTION HEADINGS ============ */
 .section-h {
   font-family: var(--font-display);

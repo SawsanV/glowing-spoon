@@ -6,6 +6,20 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "/config.js";
+import { ICONS } from "/icons.js";
+
+// Map roster names to icon keys
+function iconKey(name) {
+  return name.toLowerCase()
+    .replace(/'/g, "")        // strip apostrophes (Ifrit Lord's Belt -> ifrit lords belt)
+    .replace(/\s+/g, "_");
+}
+function captainIcon(name) {
+  return ICONS.captains[iconKey(name)] || null;
+}
+function artifactIcon(name) {
+  return ICONS.artifacts[iconKey(name)] || null;
+}
 
 // ------------------------------------------------------
 // Loud error helper — surfaces ANY error to the page itself
@@ -322,9 +336,16 @@ function renderItemCard({ name, latest, history, kind }) {
     starsRow = `<div class="stat-row"><span class="lbl">Stars</span><span>${latest.stars ?? "—"}${deltaTag(starsDelta)}</span></div>`;
   }
 
+  let ico = null;
+  if (kind === "captain") ico = captainIcon(name);
+  else if (kind === "artifact") ico = artifactIcon(name);
+
   return `
     <div class="card">
-      <div class="card-head"><div><div class="card-name">${escapeHtml(name)}</div></div></div>
+      <div class="card-head">
+        ${ico ? `<img class="card-icon" src="${ico}" alt="" />` : ""}
+        <div><div class="card-name">${escapeHtml(name)}</div></div>
+      </div>
       <div class="stat-row"><span class="lbl">Level</span><span>${latest.level ?? "—"}${deltaTag(levelDelta)}</span></div>
       ${starsRow}
       <div class="stat-row" style="margin-top:6px;"><span class="lbl">Updated</span><span>${fmtDate(latest.recorded_at)}</span></div>
@@ -371,10 +392,14 @@ async function renderCaptainsForm() {
       <div class="survey-header"><span></span><span class="col-r">Level (1-${CAPS.captain.level})</span><span class="col-r">Stars (1-${CAPS.captain.stars})</span></div>
       ${state.captainRoster.map(r => {
         const latest = data.latestCaptain.get(r.id);
+        const ico = captainIcon(r.name);
         return `<div class="survey-row" data-kind="captain" data-id="${r.id}">
-          <div>
-            <div class="row-label">${escapeHtml(r.name)}</div>
-            ${latest ? `<span class="row-last">Last: L${latest.level ?? "—"} · ★${latest.stars ?? "—"} · ${fmtDate(latest.recorded_at)}</span>` : `<span class="row-last">No entries yet</span>`}
+          <div class="row-label-wrap">
+            ${ico ? `<img class="row-icon" src="${ico}" alt="" />` : ""}
+            <div>
+              <div class="row-label">${escapeHtml(r.name)}</div>
+              ${latest ? `<span class="row-last">Last: L${latest.level ?? "—"} · ★${latest.stars ?? "—"} · ${fmtDate(latest.recorded_at)}</span>` : `<span class="row-last">No entries yet</span>`}
+            </div>
           </div>
           <input type="number" min="1" max="${CAPS.captain.level}" step="1" data-field="level" value="${latest?.level ?? ""}" placeholder="—" />
           <input type="number" min="1" max="${CAPS.captain.stars}" step="1" data-field="stars" value="${latest?.stars ?? ""}" placeholder="—" />
@@ -407,13 +432,17 @@ async function renderArtifactsForm() {
       </div>
       ${state.artifactRoster.map(r => {
         const latest = data.latestArtifact.get(r.id);
+        const ico = artifactIcon(r.name);
         const lastSummary = latest
           ? `Last: L${latest.level ?? "—"} · ${latest.stars ?? "—"}★${latest.petals != null && latest.petals > 0 ? ` +${latest.petals}p` : ""} · ${fmtDate(latest.recorded_at)}`
           : "No entries yet";
         return `<div class="survey-row survey-row-3" data-kind="artifact" data-id="${r.id}">
-          <div>
-            <div class="row-label">${escapeHtml(r.name)}</div>
-            <span class="row-last">${lastSummary}</span>
+          <div class="row-label-wrap">
+            ${ico ? `<img class="row-icon" src="${ico}" alt="" />` : ""}
+            <div>
+              <div class="row-label">${escapeHtml(r.name)}</div>
+              <span class="row-last">${lastSummary}</span>
+            </div>
           </div>
           <input type="number" min="1" max="${CAPS.artifact.level}" step="1" data-field="level" value="${latest?.level ?? ""}" placeholder="—" />
           <input type="number" min="0" max="${CAPS.artifact.stars}" step="1" data-field="stars" value="${latest?.stars ?? ""}" placeholder="—" />
@@ -556,7 +585,10 @@ async function renderCompare() {
   const heroBoard = state.profiles.map(p => ({ user: p, snap: userHero.get(p.id) }))
     .filter(r => r.snap).sort((a, b) => (b.snap.level || 0) - (a.snap.level || 0));
 
-  const captainHeader = state.captainRoster.map(c => `<th>${escapeHtml(c.name)}</th>`).join("");
+  const captainHeader = state.captainRoster.map(c => {
+    const ico = captainIcon(c.name);
+    return `<th>${ico ? `<img class="th-icon" src="${ico}" alt="" /> ` : ""}${escapeHtml(c.name)}</th>`;
+  }).join("");
   const captainRows = state.profiles.map(p => {
     const cm = userCaptain.get(p.id) || new Map();
     const cells = state.captainRoster.map(c => {
@@ -567,7 +599,10 @@ async function renderCompare() {
     return `<tr><td><strong>${escapeHtml(p.username)}</strong></td>${cells}</tr>`;
   }).join("");
 
-  const artifactHeader = state.artifactRoster.map(a => `<th>${escapeHtml(a.name)}</th>`).join("");
+  const artifactHeader = state.artifactRoster.map(a => {
+    const ico = artifactIcon(a.name);
+    return `<th>${ico ? `<img class="th-icon" src="${ico}" alt="" /> ` : ""}${escapeHtml(a.name)}</th>`;
+  }).join("");
   const artifactRows = state.profiles.map(p => {
     const am = userArtifact.get(p.id) || new Map();
     const cells = state.artifactRoster.map(a => {
