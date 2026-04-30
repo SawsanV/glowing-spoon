@@ -7,5 +7,5 @@
 //    (NOT the service_role key — that one is secret!)
 // =====================================================
 
-export const SUPABASE_URL = "https://pzthkuroeuosztunuhtp.supabase.co/rest/v1/";
+export const SUPABASE_URL = "https://pzthkuroeuosztunuhtp.supabase.co";
 export const SUPABASE_ANON_KEY = "sb_publishable_Xfd4GT6RWesUVguOAg9-DQ_gPC11SHs";
