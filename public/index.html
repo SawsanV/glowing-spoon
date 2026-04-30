@@ -63,46 +63,67 @@
     <!-- ============ MAIN APP ============ -->
     <section id="main-screen" class="hidden">
       <nav class="tabs">
-        <button class="tab active" data-tab="captains">Captains</button>
-        <button class="tab" data-tab="hero">Hero</button>
-        <button class="tab" data-tab="artifacts">Artifacts</button>
+        <button class="tab active" data-tab="my-roster">My Roster</button>
+        <button class="tab" data-tab="update-captains">Update Captains</button>
+        <button class="tab" data-tab="update-artifacts">Update Artifacts</button>
         <button class="tab" data-tab="compare">Compare</button>
       </nav>
 
-      <div class="view-toolbar">
-        <label class="filter-label">
-          Show:
-          <select id="user-filter">
-            <option value="me">My roster</option>
-          </select>
-        </label>
-      </div>
-
-      <!-- Captains tab -->
-      <div id="tab-captains" class="tab-panel">
-        <div class="panel-head">
-          <h3>Captains</h3>
-          <button class="primary-btn small" type="button" id="add-captain-btn">+ Add captain</button>
+      <!-- My Roster tab -->
+      <div id="tab-my-roster" class="tab-panel">
+        <div class="view-toolbar">
+          <label class="filter-label">
+            Show:
+            <select id="user-filter">
+              <option value="me">My roster</option>
+            </select>
+          </label>
         </div>
+
+        <h3 class="section-h">Hero</h3>
+        <div id="hero-card-container"></div>
+
+        <h3 class="section-h">Captains</h3>
         <div id="captains-list" class="card-grid"></div>
-      </div>
 
-      <!-- Hero tab -->
-      <div id="tab-hero" class="tab-panel hidden">
-        <div class="panel-head">
-          <h3>Hero</h3>
-          <button class="primary-btn small" type="button" id="update-hero-btn">+ New snapshot</button>
-        </div>
-        <div id="hero-display"></div>
-      </div>
-
-      <!-- Artifacts tab -->
-      <div id="tab-artifacts" class="tab-panel hidden">
-        <div class="panel-head">
-          <h3>Artifacts</h3>
-          <button class="primary-btn small" type="button" id="add-artifact-btn">+ Add artifact</button>
-        </div>
+        <h3 class="section-h">Artifacts</h3>
         <div id="artifacts-list" class="card-grid"></div>
+      </div>
+
+      <!-- Update Captains tab — Hero + Captains survey -->
+      <div id="tab-update-captains" class="tab-panel hidden">
+        <div class="panel-head">
+          <h3>Update hero & captains</h3>
+          <button class="primary-btn" type="button" id="save-captains-btn">Save changes</button>
+        </div>
+        <p class="muted" style="margin-bottom: 20px;">
+          Fill in only what's changed. Empty fields are skipped. Pre-filled values are your last entry.
+        </p>
+
+        <div id="captains-form-container"></div>
+
+        <div class="form-actions">
+          <button class="primary-btn" type="button" id="save-captains-btn-2">Save changes</button>
+        </div>
+        <div id="save-captains-msg" class="msg hidden"></div>
+      </div>
+
+      <!-- Update Artifacts tab -->
+      <div id="tab-update-artifacts" class="tab-panel hidden">
+        <div class="panel-head">
+          <h3>Update artifacts</h3>
+          <button class="primary-btn" type="button" id="save-artifacts-btn">Save changes</button>
+        </div>
+        <p class="muted" style="margin-bottom: 20px;">
+          Fill in only what's changed. Empty fields are skipped. Pre-filled values are your last entry.
+        </p>
+
+        <div id="artifacts-form-container"></div>
+
+        <div class="form-actions">
+          <button class="primary-btn" type="button" id="save-artifacts-btn-2">Save changes</button>
+        </div>
+        <div id="save-artifacts-msg" class="msg hidden"></div>
       </div>
 
       <!-- Compare tab -->
@@ -114,7 +135,7 @@
       </div>
     </section>
 
-    <!-- ============ MODALS ============ -->
+    <!-- Modal -->
     <div id="modal-backdrop" class="modal-backdrop hidden">
       <div id="modal" class="modal"></div>
     </div>
@@ -124,7 +145,6 @@
     <span>Built for the realm.</span>
   </footer>
 
-  <!-- Supabase JS via ESM -->
   <script type="module" src="/app.js"></script>
 </body>
 </html>
