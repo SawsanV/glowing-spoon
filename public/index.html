@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Total Battle Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Crimson+Pro:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">⚔</span>
+      <h1>Total Battle</h1>
+      <span class="brand-sub">tracker</span>
+    </div>
+    <div id="user-bar" class="user-bar hidden">
+      <span id="user-display"></span>
+      <button id="admin-btn" class="ghost-btn hidden" type="button">Admin</button>
+      <button id="signout-btn" class="ghost-btn" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <main id="app">
+    <!-- ============ AUTH SCREEN ============ -->
+    <section id="auth-screen" class="auth-screen">
+      <div class="auth-card">
+        <h2 id="auth-title">Sign in</h2>
+        <p id="auth-sub" class="muted">Welcome back, captain.</p>
+
+        <div class="field">
+          <label for="auth-email">Email</label>
+          <input type="email" id="auth-email" autocomplete="email" />
+        </div>
+
+        <div class="field">
+          <label for="auth-password">Password</label>
+          <input type="password" id="auth-password" autocomplete="current-password" />
+        </div>
+
+        <div class="field signup-only hidden">
+          <label for="auth-username">Username</label>
+          <input type="text" id="auth-username" autocomplete="username" />
+        </div>
+
+        <div class="field signup-only hidden">
+          <label for="auth-code">Group code</label>
+          <input type="text" id="auth-code" placeholder="Ask your group admin" />
+        </div>
+
+        <div id="auth-msg" class="msg hidden"></div>
+
+        <button id="auth-submit" class="primary-btn" type="button">Sign in</button>
+        <p class="auth-toggle">
+          <span id="auth-toggle-text">No account?</span>
+          <a href="#" id="auth-toggle-link">Sign up</a>
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ MAIN APP ============ -->
+    <section id="main-screen" class="hidden">
+      <nav class="tabs">
+        <button class="tab active" data-tab="captains">Captains</button>
+        <button class="tab" data-tab="hero">Hero</button>
+        <button class="tab" data-tab="artifacts">Artifacts</button>
+        <button class="tab" data-tab="compare">Compare</button>
+      </nav>
+
+      <div class="view-toolbar">
+        <label class="filter-label">
+          Show:
+          <select id="user-filter">
+            <option value="me">My roster</option>
+          </select>
+        </label>
+      </div>
+
+      <!-- Captains tab -->
+      <div id="tab-captains" class="tab-panel">
+        <div class="panel-head">
+          <h3>Captains</h3>
+          <button class="primary-btn small" type="button" id="add-captain-btn">+ Add captain</button>
+        </div>
+        <div id="captains-list" class="card-grid"></div>
+      </div>
+
+      <!-- Hero tab -->
+      <div id="tab-hero" class="tab-panel hidden">
+        <div class="panel-head">
+          <h3>Hero</h3>
+          <button class="primary-btn small" type="button" id="update-hero-btn">+ New snapshot</button>
+        </div>
+        <div id="hero-display"></div>
+      </div>
+
+      <!-- Artifacts tab -->
+      <div id="tab-artifacts" class="tab-panel hidden">
+        <div class="panel-head">
+          <h3>Artifacts</h3>
+          <button class="primary-btn small" type="button" id="add-artifact-btn">+ Add artifact</button>
+        </div>
+        <div id="artifacts-list" class="card-grid"></div>
+      </div>
+
+      <!-- Compare tab -->
+      <div id="tab-compare" class="tab-panel hidden">
+        <div class="panel-head">
+          <h3>Group comparison</h3>
+        </div>
+        <div id="compare-content"></div>
+      </div>
+    </section>
+
+    <!-- ============ MODALS ============ -->
+    <div id="modal-backdrop" class="modal-backdrop hidden">
+      <div id="modal" class="modal"></div>
+    </div>
+  </main>
+
+  <footer class="bottombar">
+    <span>Built for the realm.</span>
+  </footer>
+
+  <!-- Supabase JS via ESM -->
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

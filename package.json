@@ -1,0 +1,6 @@
+{
+  "name": "tb-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Total Battle progress tracker (static frontend + Supabase)"
+}
