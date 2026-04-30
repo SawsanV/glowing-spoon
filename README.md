@@ -1,6 +1,6 @@
-# Total Battle Tracker — setup
+# TBANON Tracker — setup
 
-A self-hosted progress tracker for Total Battle. Captains, hero, artifacts, snapshot history, and a group leaderboard. Built on Supabase (Postgres + Auth) with a static frontend deployed on Vercel.
+A self-hosted progress tracker for Tb. Captains, hero, artifacts, snapshot history, and a group leaderboard. Built on Supabase (Postgres + Auth) with a static frontend deployed on Vercel.
 
 ---
 
